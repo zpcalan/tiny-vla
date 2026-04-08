@@ -123,7 +123,6 @@ class Qwen3VLProvider:
             **inputs,
             max_new_tokens=500,
             do_sample=True,
-            skip_prompt=True,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
         )
