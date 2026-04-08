@@ -9,9 +9,16 @@ import torch
 from torch import Tensor
 from transformers import BitsAndBytesConfig
 
+import argparse
+
+parser = argparse.ArgumentParser(description='Input file paths')
+parser.add_argument('--model-path', type=str, default='E:/我的项目/tiny-vla/qwen3-vl-4b-instruct')
+parser.add_argument('--image-file-path', type=str, default='E:/我的项目/tiny-vla/random_shot.jpg')
+
+args = parser.parse_args()
 
 class Qwen3VLProvider:
-    def __init__(self, model_path="/data/k8s/zpc/spirit-v1.5/qwen3-vl-4b-instruct"):
+    def __init__(self, model_path):
         quant_config = BitsAndBytesConfig(
             load_in_4bit=True,
             bnb_4bit_compute_dtype=torch.bfloat16,  # 推理用fp16
@@ -37,15 +44,15 @@ class Qwen3VLProvider:
                 "content": [
                     {
                         "type": "image",
-                        "image": "/data/k8s/zpc/spirit-v1.5/home_proj/random_shot.jpg",
+                        "image": args.image_file_path,
                     },
-                    {
-                        "type": "image",
-                        "image": "/data/k8s/zpc/spirit-v1.5/home_proj/cat1.jpg",
-                    },
+                    # {
+                    #     "type": "image",
+                    #     "image": "E:/我的项目/tiny-vla/cat1.jpg",
+                    # },
                     {
                         "type": "text",
-                        "text": "描述下这张图像 并且详细说明下每个物体的位置",
+                        "text": "Describe this image",
                     },
                 ],
             }
@@ -114,11 +121,13 @@ class Qwen3VLProvider:
         # print(self.tokenizer.decode(inputs["input_ids"][0]))
         outputs = self.model.generate(
             **inputs,
-            max_new_tokens=2000,
+            max_new_tokens=500,
             do_sample=True,
+            skip_prompt=True,
             pad_token_id=self.tokenizer.pad_token_id,
             eos_token_id=self.tokenizer.eos_token_id,
         )
+        print(outputs[0])
         print(self.tokenizer.decode(outputs[0]))
         # print(self.model.parameters)
         # total = 0
@@ -142,5 +151,5 @@ class Qwen3VLProvider:
 
 
 if __name__ == "__main__":
-    qwen3_vl_provider = Qwen3VLProvider()
+    qwen3_vl_provider = Qwen3VLProvider(args.model_path)
     qwen3_vl_provider.one_step_infer()
