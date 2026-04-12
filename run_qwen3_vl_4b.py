@@ -6,8 +6,9 @@ from qwen_vl_utils import process_vision_info
 import numpy as np
 from PIL import Image
 import torch
-from torch import Tensor
+from torch import Tensor, nn
 from transformers import BitsAndBytesConfig
+from modules import TimeStepEmbed, TransformerBlock, AdaLN
 
 import argparse
 
@@ -128,6 +129,8 @@ class Qwen3VLProvider:
         )
         print(outputs[0])
         print(self.tokenizer.decode(outputs[0]))
+        logits = self.model(**inputs, use_cache=True).logits
+        return logits
         # print(self.model.parameters)
         # total = 0
         # for name, param in self.model.named_parameters():
@@ -149,6 +152,44 @@ class Qwen3VLProvider:
         # time.sleep(10000)
 
 
+
+
+class DiTProvider(nn.module):
+    def __init__(self, time_dim, hidden_dim, action_dim, num_layers):
+        # For current version, we do not add state, for this is simple action scenario
+        # 1.Encode for timestep as embedding vector. This timestep embedding will be applied to AdaLN for each norm op.
+        self.timestep_encoder = TimeStepEmbed(time_dim)
+        # 2.Project x_t noise to hidden_state.
+        self.noise_proj = nn.Linear(action_dim, hidden_dim)
+        # 3.Transformer blocks. Because there's vlm encoder hidden states, use cross attn.
+        blocks = [
+            TransformerBlock(hidden_dim)
+            for _ in range(num_layers)
+        ]
+        self.transformer_blocks = nn.ModuleList(blocks)
+
+        # 4.Get shift and scale for AdaLN of the last hidden_state.
+        self.output_ada_ln = AdaLN(hidden_dim)
+
+        # 5.Project action output.
+        self.action_proj = nn.Linear(hidden_dim, action_dim)
+
+    def forward(self, x_t, encoder_hidden_state, time_step):
+        # x is projection of noise epsilon.
+        # The time_step should be a scalar.
+        hidden_states = x_t
+        time_emb = self.timestep_encoder(time_step)
+        for block in self.transformer_blocks:
+            hidden_states = block(hidden_states, encoder_hidden_state, time_emb)
+        hidden_states = self.output_ada_ln(hidden_states, time_emb)
+        output = self.action_proj(hidden_states)
+        return output
+
+
+
+
 if __name__ == "__main__":
     qwen3_vl_provider = Qwen3VLProvider(args.model_path)
-    qwen3_vl_provider.one_step_infer()
+    dit_provider = DiTProvider(time_dim=1024, hidden_dim=2048, action_dim=2, num_layers=5)
+    vlm_output = qwen3_vl_provider.one_step_infer()
+    dit_provider(x_t=None, encoder_hidden_state=vlm_output, time_step=2)
