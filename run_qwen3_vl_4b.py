@@ -10,6 +10,9 @@ from torch import Tensor, nn
 from transformers import BitsAndBytesConfig
 from modules import TimeStepEmbed, TransformerBlock, AdaLN
 
+
+from torchcfm.conditional_flow_matching import *
+
 import argparse
 
 parser = argparse.ArgumentParser(description='Input file paths')
@@ -187,17 +190,51 @@ class DiTProvider(nn.Module):
         output = self.action_proj(hidden_states)
         return output
 
+class TinyVLA(nn.Module):
+    def __init__(self, is_train=False, train_algo="flow_match"):
+        super().__init__()
+        self.action_dim = 2
+        self.time_step = Tensor([2]).cuda()
+
+        self.qwen3_vl_provider = Qwen3VLProvider(args.model_path)
+        self.dit_provider = DiTProvider(time_dim=1024, hidden_dim=2048, action_dim=self.action_dim, num_layers=5)
+        self.dit_provider.to(torch.cuda.current_device())
+        self.dit_provider = self.dit_provider.to(torch.bfloat16)
+
+
+        if is_train:  
+            self.optimizer = torch.optim.Adam(model.parameters())
+            self.FM = ExactOptimalTransportConditionalFlowMatcher(sigma=sigma)
+    
+    def infer(self):
+        vlm_last_hidden_state = self.qwen3_vl_provider.one_step_infer()
+        noise = torch.normal(mean=0.0, std=1.0, size=[1, self.action_dim], dtype=torch.bfloat16).cuda()
+        output = self.dit_provider(x_t=noise, encoder_hidden_state=vlm_last_hidden_state, time_step=self.time_step)
+        print(output)
+
+    
+    def train(self):
+        # Fake data.
+        sample = {}
+        sample["action"] = torch.rand(1, self.action_dim)
+        sample["image"] = args.image_file_path
+        sample["instruction"] = "Touch the orange"
+        # Inputs: noise(epsilon), t(time_step), data(sample)
+        noise = torch.randn_like(sample["action"])
+
+        # Sample for each step.
+        t, xt, ut = self.FM.sample_location_and_conditional_flow(noise, sample["action"])
+        vlm_last_hidden_state = self.qwen3_vl_provider.one_step_infer(sample["image"], sample["instruction"])
+        output = self.dit_provider(x_t=xt, encoder_hidden_state=vlm_last_hidden_state, time_step=t)
+        loss = torch.mean((output - ut) ** 2)
+        loss.backward()
+        self.optimizer.step()
+
 
 
 
 if __name__ == "__main__":
-    action_dim = 2
-    qwen3_vl_provider = Qwen3VLProvider(args.model_path)
-    dit_provider = DiTProvider(time_dim=1024, hidden_dim=2048, action_dim=action_dim, num_layers=5)
-    dit_provider.to(torch.cuda.current_device())
-    dit_provider = dit_provider.to(torch.bfloat16)
-    print(dit_provider.timestep_encoder.mlp.linear_1.weight)
-    vlm_last_hidden_state = qwen3_vl_provider.one_step_infer()
-    noise = torch.normal(mean=0.0, std=1.0, size=[1, action_dim], dtype=torch.bfloat16).cuda()
-    output = dit_provider(x_t=noise, encoder_hidden_state=vlm_last_hidden_state, time_step=Tensor([2]).cuda())
-    print(output)
+    tiny_vla = TinyVLA()
+    tiny_vla.infer()
+
+
